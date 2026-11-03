@@ -20,3 +20,16 @@ sql
 SELECT 1 FROM homes WHERE id = ?
 -- Insert member
 INSERT INTO members (id, home_id, name) VALUES (?, ?, ?)
+
+
+1. Database Migrations Applied Successfully
+2. API Endpoints Implemented
+   POST /api/homes
+
+step 3:
+Implement the bill-splitting business logic as a standalone, testable TypeScript function.
+
+step 4:
+POST /api/homes//bills
+POST /api/bills//shares//pay
+GET /api/homes//balances
