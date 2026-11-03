@@ -153,32 +153,54 @@ app.post('/api/bills/:billId/shares/:shareId/pay', async (c) => {
         UPDATE shares
         SET paid_at = ?, idempotency_key = ?
         WHERE id = ? AND bill_id = ? AND paid_at IS NULL
-        RETURNING id, paid_at
+        RETURNING id, member_id, amount_cents, paid_at
       `)
       .bind(paidAt, idempotencyKey, shareId, billId)
-      .first<{ id: string; paid_at: string }>()
+      .first<{ id: string; member_id: string; amount_cents: number; paid_at: string }>()
 
     if (paidShare) {
-      return c.json({ id: paidShare.id, paidAt: paidShare.paid_at }, 200)
+      return c.json(
+        {
+          id: paidShare.id,
+          memberId: paidShare.member_id,
+          amountCents: paidShare.amount_cents,
+          paidAt: paidShare.paid_at,
+        },
+        200,
+      )
     }
 
     // The conditional update can only miss because the share is already paid,
     // does not exist, or belongs to another bill. Read it to distinguish a
     // successful replay from a conflict or a missing share.
     const existingShare = await c.env.DB.prepare(`
-        SELECT id, paid_at, idempotency_key
+        SELECT id, member_id, amount_cents, paid_at, idempotency_key
         FROM shares
         WHERE id = ? AND bill_id = ?
       `)
       .bind(shareId, billId)
-      .first<{ id: string; paid_at: string | null; idempotency_key: string | null }>()
+      .first<{
+        id: string
+        member_id: string
+        amount_cents: number
+        paid_at: string | null
+        idempotency_key: string | null
+      }>()
 
     if (!existingShare) return c.json({ error: 'Share not found' }, 404)
 
     if (existingShare.paid_at) {
       // Replaying the same successful request returns the original result.
       if (existingShare.idempotency_key === idempotencyKey) {
-        return c.json({ id: existingShare.id, paidAt: existingShare.paid_at }, 200)
+        return c.json(
+          {
+            id: existingShare.id,
+            memberId: existingShare.member_id,
+            amountCents: existingShare.amount_cents,
+            paidAt: existingShare.paid_at,
+          },
+          200,
+        )
       }
 
       return c.json({ error: 'Share already paid' }, 409)
@@ -192,6 +214,101 @@ app.post('/api/bills/:billId/shares/:shareId/pay', async (c) => {
     console.error('Failed to pay share', error)
     return c.json({ error: 'Unable to process payment' }, 500)
   }
+})
+
+// GET /api/homes/:homeId
+app.get('/api/homes/:homeId', async (c) => {
+  const { homeId } = c.req.param()
+
+  const home = await c.env.DB.prepare('SELECT id, name FROM homes WHERE id = ?')
+    .bind(homeId)
+    .first<{ id: string; name: string }>()
+  if (!home) return c.json({ error: 'Home not found' }, 404)
+
+  const members = await c.env.DB.prepare(
+    'SELECT id, name FROM members WHERE home_id = ? ORDER BY position ASC',
+  )
+    .bind(homeId)
+    .all<{ id: string; name: string }>()
+
+  const rows = await c.env.DB.prepare(`
+      SELECT
+        b.id AS billId,
+        b.title AS title,
+        b.total_cents AS totalCents,
+        s.id AS shareId,
+        s.member_id AS memberId,
+        m.name AS memberName,
+        s.amount_cents AS amountCents,
+        s.paid_at AS paidAt
+      FROM bills b
+      LEFT JOIN shares s ON s.bill_id = b.id
+      LEFT JOIN members m ON m.id = s.member_id
+      WHERE b.home_id = ?
+      ORDER BY b.created_at ASC, b.rowid ASC, m.position ASC
+    `)
+    .bind(homeId)
+    .all<{
+      billId: string
+      title: string
+      totalCents: number
+      shareId: string | null
+      memberId: string | null
+      memberName: string | null
+      amountCents: number | null
+      paidAt: string | null
+    }>()
+
+  const bills = new Map<
+    string,
+    {
+      id: string
+      title: string
+      totalCents: number
+      shares: Array<{
+        id: string
+        memberId: string
+        memberName: string
+        amountCents: number
+        paidAt: string | null
+      }>
+    }
+  >()
+
+  for (const row of rows.results) {
+    let bill = bills.get(row.billId)
+    if (!bill) {
+      bill = {
+        id: row.billId,
+        title: row.title,
+        totalCents: row.totalCents,
+        shares: [],
+      }
+      bills.set(row.billId, bill)
+    }
+
+    if (
+      row.shareId !== null &&
+      row.memberId !== null &&
+      row.memberName !== null &&
+      row.amountCents !== null
+    ) {
+      bill.shares.push({
+        id: row.shareId,
+        memberId: row.memberId,
+        memberName: row.memberName,
+        amountCents: row.amountCents,
+        paidAt: row.paidAt,
+      })
+    }
+  }
+
+  return c.json({
+    id: home.id,
+    name: home.name,
+    members: members.results,
+    bills: [...bills.values()],
+  })
 })
 
 // GET /api/homes/:homeId/balances
