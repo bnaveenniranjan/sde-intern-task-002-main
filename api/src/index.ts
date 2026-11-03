@@ -1,8 +1,22 @@
 import { Hono } from 'hono'
+import { HTTPException } from 'hono/http-exception'
 import { validator } from 'hono/validator'
 import { splitBill } from './bill-splitter'
 
 const app = new Hono<{ Bindings: Env }>()
+
+app.onError((error, c) => {
+  // Framework errors such as a malformed JSON body carry their own status.
+  // Preserve it instead of hiding every failure behind a 500.
+  if (error instanceof HTTPException) {
+    return c.json({ error: error.message || 'Request failed' }, error.status)
+  }
+
+  console.error('Unhandled API error', error)
+  return c.json({ error: 'Internal server error' }, 500)
+})
+
+app.notFound((c) => c.json({ error: 'Not found' }, 404))
 
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
@@ -44,17 +58,17 @@ app.post(
     const home = await c.env.DB.prepare('SELECT 1 FROM homes WHERE id = ?').bind(homeId).first()
     if (!home) return c.json({ error: 'Home not found' }, 404)
 
-    // Get next position for this home
-    const lastMember = await c.env.DB.prepare(
-      'SELECT position FROM members WHERE home_id = ? ORDER BY position DESC LIMIT 1',
-    )
-      .bind(homeId)
-      .first()
-    const position = lastMember ? (lastMember as { position: number }).position + 1 : 0
-
+    // Choose the next position inside the insert itself. A read followed by a
+    // write could race with a concurrent member creation and give two members
+    // the same position, making their order ambiguous.
     const id = crypto.randomUUID()
-    await c.env.DB.prepare('INSERT INTO members (id, home_id, name, position) VALUES (?, ?, ?, ?)')
-      .bind(id, homeId, name, position)
+    await c.env.DB.prepare(`
+      INSERT INTO members (id, home_id, name, position)
+      SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0)
+      FROM members
+      WHERE home_id = ?
+    `)
+      .bind(id, homeId, name, homeId)
       .run()
 
     return c.json({ id, homeId, name }, 201)

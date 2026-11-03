@@ -29,7 +29,7 @@ CREATE TABLE shares (
   id TEXT PRIMARY KEY,
   bill_id TEXT NOT NULL,
   member_id TEXT NOT NULL,
-  amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
+  amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
   paid_at TEXT NULL,
   FOREIGN KEY (bill_id) REFERENCES bills(id) ON DELETE CASCADE,
   FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
