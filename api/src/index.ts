@@ -54,22 +54,27 @@ app.post(
     const { homeId } = c.req.param()
     const { name } = c.req.valid('json')
 
-    // Check home exists
-    const home = await c.env.DB.prepare('SELECT 1 FROM homes WHERE id = ?').bind(homeId).first()
-    if (!home) return c.json({ error: 'Home not found' }, 404)
-
-    // Choose the next position inside the insert itself. A read followed by a
-    // write could race with a concurrent member creation and give two members
-    // the same position, making their order ambiguous.
+    // Allocate the position from a per-home counter and insert in one atomic
+    // batch. Bumping the counter inside the transaction means two concurrent
+    // requests can never receive the same position, and deriving the value
+    // from the same home row removes the read-then-write race entirely.
     const id = crypto.randomUUID()
-    await c.env.DB.prepare(`
-      INSERT INTO members (id, home_id, name, position)
-      SELECT ?, ?, ?, COALESCE(MAX(position) + 1, 0)
-      FROM members
-      WHERE home_id = ?
-    `)
-      .bind(id, homeId, name, homeId)
-      .run()
+    const [, inserted] = await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE homes SET next_member_position = next_member_position + 1 WHERE id = ?',
+      ).bind(homeId),
+      c.env.DB.prepare(`
+          INSERT INTO members (id, home_id, name, position)
+          SELECT ?, ?, ?, next_member_position - 1
+          FROM homes
+          WHERE id = ?
+          RETURNING position
+        `).bind(id, homeId, name, homeId),
+    ])
+
+    // The INSERT ... SELECT yields no row when the home does not exist, so it
+    // doubles as the existence check without a separate (racy) SELECT.
+    if (!inserted?.results?.length) return c.json({ error: 'Home not found' }, 404)
 
     return c.json({ id, homeId, name }, 201)
   },

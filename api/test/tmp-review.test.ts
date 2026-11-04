@@ -8,9 +8,7 @@ describe('review probes', () => {
     const names = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J']
 
     const results = await Promise.all(
-      names.map((name) =>
-        call<Member>('POST', `/api/homes/${homeId}/members`, { body: { name } }),
-      ),
+      names.map((name) => call<Member>('POST', `/api/homes/${homeId}/members`, { body: { name } })),
     )
 
     expect(results.map((result) => result.status)).toEqual(names.map(() => 201))
@@ -26,9 +24,7 @@ describe('review probes', () => {
   it('probe: direct non-integer amount insert', async () => {
     const { homeId } = await createHome(['A'])
 
-    await env.DB.prepare(
-      'INSERT INTO bills (id, home_id, title, total_cents) VALUES (?, ?, ?, ?)',
-    )
+    await env.DB.prepare('INSERT INTO bills (id, home_id, title, total_cents) VALUES (?, ?, ?, ?)')
       .bind(crypto.randomUUID(), homeId, 'Probe', 10.5)
       .run()
 

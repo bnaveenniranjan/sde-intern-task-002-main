@@ -10,6 +10,7 @@ build/
 .DS_Store
 .vscode/
 .idea/
+.vitest/
 
 # wrangler-generated types — regenerate on `pnpm install` via api/postinstall
 api/worker-configuration.d.ts
